@@ -131,6 +131,7 @@
     filtered: [],
     rendered: 0,
     index: {},
+    originalIndex: {},
     observer: null
   };
 
@@ -138,6 +139,8 @@
 
   function init() {
     state.catalog = getCatalog();
+    buildPartIndexes();
+    normalizeCartCodes();
     initLanguageSwitchers();
     initCartShell();
     initImageProtection();
@@ -158,6 +161,110 @@
       hidePrices: true,
       parts: []
     };
+  }
+
+
+  function buildPartIndexes() {
+    state.index = {};
+    state.originalIndex = {};
+    (state.catalog.parts || []).forEach(function (part) {
+      var code = cleanText(part && part.code);
+      var originalCode = cleanText(part && part.originalCode);
+      if (code) {
+        state.index[code] = part;
+      }
+      if (originalCode) {
+        state.originalIndex[originalCode] = part;
+      }
+    });
+  }
+
+  function findCatalogPart(code) {
+    code = cleanText(code);
+    if (!code) {
+      return null;
+    }
+    return (state.index && state.index[code]) ||
+      (state.originalIndex && state.originalIndex[code]) ||
+      null;
+  }
+
+  function buildCartItem(part, quantity) {
+    return {
+      code: part.code,
+      originalCode: part.originalCode || "",
+      sourceModel: part.sourceModel || part.useModels || "",
+      useModels: part.useModels || part.sourceModel || "",
+      unit: part.unit || "",
+      nameEn: part.nameEn || "",
+      nameFr: part.nameFr || "",
+      nameAr: part.nameAr || "",
+      nameZh: part.nameZh || "",
+      displayName: part.displayName || "",
+      material: part.material || "",
+      materialEn: part.materialEn || "",
+      materialFr: part.materialFr || "",
+      materialAr: part.materialAr || "",
+      picture: part.picture || null,
+      latestPrice: getLatestPrice(part),
+      latestPriceCurrency: part.latestPriceCurrency || "CNY",
+      quantity: Math.max(0, Math.floor(Number(quantity) || 0))
+    };
+  }
+
+  function normalizeCartCodes() {
+    var cart = loadCart();
+    var next = {};
+    var changed = false;
+
+    Object.keys(cart).forEach(function (key) {
+      var item = cart[key];
+      var part;
+      var normalized;
+
+      if (!item || !item.code) {
+        changed = true;
+        return;
+      }
+
+      part = findCatalogPart(item.code) ||
+        findCatalogPart(item.originalCode) ||
+        findCatalogPart(key);
+
+      if (!part) {
+        if (item.quantity > 0) {
+          next[key] = item;
+        } else {
+          changed = true;
+        }
+        return;
+      }
+
+      normalized = buildCartItem(part, item.quantity);
+      if (normalized.quantity <= 0) {
+        changed = true;
+        return;
+      }
+
+      if (next[normalized.code]) {
+        next[normalized.code].quantity += normalized.quantity;
+        changed = true;
+      } else {
+        next[normalized.code] = normalized;
+      }
+
+      if (normalized.code !== key ||
+        normalized.code !== item.code ||
+        normalized.originalCode !== (item.originalCode || "")) {
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      saveCart(next);
+    }
+
+    return changed ? next : cart;
   }
 
   function readStorage(key, fallback) {
@@ -384,7 +491,7 @@
   }
 
   function getCartItems() {
-    var cart = loadCart();
+    var cart = normalizeCartCodes();
 
     return Object.values(cart)
       .filter(function (item) {
@@ -431,6 +538,7 @@
 
     cart[part.code] = {
       code: part.code,
+      originalCode: part.originalCode || "",
       nameEn: part.nameEn || "",
       nameFr: part.nameFr || "",
       nameAr: part.nameAr || "",
@@ -472,10 +580,7 @@
       return;
     }
 
-    state.index = {};
-    state.catalog.parts.forEach(function (part) {
-      state.index[part.code] = part;
-    });
+    buildPartIndexes();
 
     submit.addEventListener("click", submitCart);
     search.addEventListener("input", function () {
